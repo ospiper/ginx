@@ -1,8 +1,9 @@
 package util
 
 import (
-	"fmt"
 	"reflect"
+
+	"github.com/ospiper/ginx/dbx"
 )
 
 func As[T any](v any) (T, bool) {
@@ -16,7 +17,14 @@ func As[T any](v any) (T, bool) {
 	} else if vl.CanAddr() {
 		return As[T](vl.Addr().Interface())
 	} else {
-		fmt.Println("not addressable")
 		return ret, false
 	}
+}
+
+func AsIDList[T dbx.WithID](ts []T) []int64 {
+	ret := make([]int64, len(ts))
+	for i, t := range ts {
+		ret[i] = t.GetID()
+	}
+	return ret
 }

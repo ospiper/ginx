@@ -1,15 +1,14 @@
-package sentinel
+package rest
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/mitchellh/mapstructure"
 	"github.com/ospiper/ginx/dbx"
 )
 
@@ -20,91 +19,84 @@ type IDQueryInPath struct {
 type PagedResults[T any] struct {
 	Records []*T  `json:"records"`
 	Total   int64 `json:"total"`
-	*Pagination
 }
 
-func buildOrders(q url.Values) ([]Order, error) {
-	if !q.Has("order") {
-		return []Order{
-			{Column: "id", Desc: false},
-		}, nil
-	}
-	orders := q["order"]
-	desc := q["desc"]
-	if len(desc) > 0 && len(desc) != len(orders) {
-		return nil, errors.New("length of desc must correspond with order")
-	}
-	ret := make([]Order, 0, len(orders))
-	for i, o := range orders {
-		d := false
-		var err error
-		if len(desc) > 0 {
-			d, err = strconv.ParseBool(desc[i])
-			if err != nil {
-				return nil, err
-			}
-		}
-		ret = append(ret, Order{Column: o, Desc: d})
-	}
-	return ret, nil
+type SimpleRestQuery struct {
+	Filter string `form:"filter"`
+	Sort   string `form:"sort"`
+	Range  string `form:"range"`
+	Embed  string `form:"embed"`
 }
 
-// BuildConditions ?page=1&limit=100&order=id&desc=true&order=created_at&desc=true&abs_path[Regex]=%2FVolumes.*&name=TestDrive
-// Available conditions:
-// Eq(optional), NotEq
-// Gt, Lt, Gte, Lte
-// Like, NotLike
-// Between, NotBetween
-// In, NotIn
-// Regex
-// Ts ts_query
-func BuildConditions(c *gin.Context) (*FindConditions, error) {
-	pagination := new(Pagination)
-	err := c.ShouldBindQuery(pagination)
+var regRange = regexp.MustCompile(`^\[(\d+)[-,]\s*(\d+)]$`)
+
+// BuildSimpleRestConditions ?sort=["title","ASC"]&range=[0, 24]&filter={"title":"bar"}
+func BuildSimpleRestConditions(c *gin.Context) (*FindConditions, error) {
+	req := new(SimpleRestQuery)
+	err := c.ShouldBindQuery(req)
 	if err != nil {
 		return nil, err
 	}
-	queries := c.Request.URL.Query()
-	queries.Del("page")
-	queries.Del("limit")
-	orders, err := buildOrders(queries)
-	if err != nil {
-		return nil, err
-	}
-	queries.Del("order")
-	queries.Del("desc")
-	matchPattern, _ := regexp.Compile(`^([a-zA-Z]\w*)(\[(\w+)])?$`)
-	filters := make(map[string]map[string][]string) // {id: {gt: 1, lt: 2}}
-	for k, v := range queries {
-		matches := matchPattern.FindStringSubmatch(k)
-		if len(matches) == 0 {
-			continue
-		}
-		field := matches[1]
-		verb := matches[3]
-		if verb == "" {
-			verb = "eq"
-		}
-		if _, ok := filters[field]; !ok {
-			filters[field] = make(map[string][]string)
-		}
-		filters[field][verb] = v
-	}
-	filter := make(map[string]*Filter, len(filters))
-	for k, v := range filters {
-		_f := new(Filter)
-		err := mapstructure.Decode(v, _f)
+	// embed
+	var embed []string
+	if req.Embed != "" {
+		err = json.Unmarshal([]byte(req.Embed), &embed)
 		if err != nil {
 			return nil, err
 		}
-		filter[k] = _f
 	}
-	ret := &FindConditions{
-		Filters:    filter,
+
+	// range [start,end]
+	ranges := regRange.FindStringSubmatch(req.Range)
+	page := &Range{}
+	if len(ranges) > 1 {
+		start, err := strconv.ParseInt(ranges[1], 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		end, err := strconv.ParseInt(ranges[2], 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		page.Start, page.End = int(start), int(end)
+	} else {
+		page.Start = 0
+		page.End = 25
+	}
+
+	// sort
+	var sort []string
+	if req.Sort != "" {
+		err = json.Unmarshal([]byte(req.Sort), &sort)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		sort = []string{"id", "asc"}
+	}
+	if len(sort)%2 != 0 {
+		return nil, errors.New("sort must be pairs")
+	}
+	var orders []Order
+	for i := 0; i < len(sort); i += 2 {
+		field, order := sort[i], strings.ToLower(sort[i+1])
+		orders = append(orders, Order{
+			Column: field,
+			Desc:   order == "desc",
+		})
+	}
+
+	// filter
+	filters, err := buildFilters(req.Filter)
+	if err != nil {
+		return nil, err
+	}
+	return &FindConditions{
+		Filters:    filters,
 		Orders:     orders,
-		Pagination: pagination,
-	}
-	return ret, nil
+		Preloads:   embed,
+		Pagination: page,
+	}, nil
 }
 
 type ResourceController[T dbx.ModelStruct[T]] struct {
@@ -131,13 +123,13 @@ func NestedController[TBase dbx.ModelStruct[TBase], TNest dbx.ModelStruct[TNest]
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		cond, err := BuildConditions(c)
+		cond, err := BuildSimpleRestConditions(c)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		var parentModel TBase
-		p := parentModel.ID(params.ID)
+		p := parentModel.NewWithID(params.ID)
 		records, err := nestController.Provider.FindAssoc(c, &p, name, cond)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -148,17 +140,17 @@ func NestedController[TBase dbx.ModelStruct[TBase], TNest dbx.ModelStruct[TNest]
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, &PagedResults[TNest]{
-			Records:    records,
-			Total:      cnt,
-			Pagination: cond.Pagination,
-		})
+		code, hd := PaginationHeader(cond.Pagination, cnt)
+		if hd != "" {
+			c.Header("Content-Range", hd)
+		}
+		c.JSON(code, records)
 	})
 }
 
 func RegisterResourceController[T dbx.ModelStruct[T]](base *gin.RouterGroup, provider Provider[T]) *ResourceController[T] {
 	base.GET("", func(c *gin.Context) { // /drives
-		cond, err := BuildConditions(c)
+		cond, err := BuildSimpleRestConditions(c)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -173,11 +165,11 @@ func RegisterResourceController[T dbx.ModelStruct[T]](base *gin.RouterGroup, pro
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, &PagedResults[T]{
-			Records:    records,
-			Total:      cnt,
-			Pagination: cond.Pagination,
-		})
+		code, hd := PaginationHeader(cond.Pagination, cnt)
+		if hd != "" {
+			c.Header("Content-Range", hd)
+		}
+		c.JSON(code, records)
 	})
 	base.POST("", func(c *gin.Context) { // /drives
 		var data T

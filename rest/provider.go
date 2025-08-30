@@ -1,14 +1,14 @@
-package sentinel
+package rest
 
 import (
 	"context"
 	"errors"
-	"fmt"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/ospiper/ginx/dbx"
 	"github.com/ospiper/ginx/util"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 const (
@@ -23,8 +23,8 @@ type Provider[T dbx.ModelStruct[T]] interface {
 	FindOne(ctx context.Context, id int64) (*T, error)
 	Find(ctx context.Context, conditions *FindConditions) ([]*T, error)
 	FindAssoc(ctx context.Context, parentModel any, assocName string, conditions *FindConditions) ([]*T, error)
-	Count(ctx context.Context, filter FilterSet) (int64, error)
-	CountAssoc(ctx context.Context, parentModel any, assocName string, filter FilterSet) (int64, error)
+	Count(ctx context.Context, filter []FilterFunc) (int64, error)
+	CountAssoc(ctx context.Context, parentModel any, assocName string, filter []FilterFunc) (int64, error)
 
 	Insert(ctx context.Context, v *T) error
 	InsertMany(ctx context.Context, vs []*T) error
@@ -62,7 +62,7 @@ type _assertion struct {
 	dbx.Model
 }
 
-func (a _assertion) ID(id int64) _assertion {
+func (a _assertion) NewWithID(id int64) _assertion {
 	return _assertion{dbx.Model{ID: id}}
 }
 
@@ -70,7 +70,8 @@ var (
 	// compile time type assertion
 	_ = NewProvider[_assertion](nil)
 
-	ErrNotFound = errors.New("record not found")
+	ErrNotFound     = errors.New("record not found")
+	ErrNotDeletable = errors.New("cannot delete record")
 )
 
 func (w *providerImpl[T]) GetDB() *gorm.DB {
@@ -92,13 +93,9 @@ func (w *providerImpl[T]) FindOne(ctx context.Context, id int64) (*T, error) {
 	tx := w.db.WithContext(ctx).Model(ret)
 	pld, ok := util.As[dbx.Preloader](ret)
 	if ok {
-		fmt.Println("preload", pld.Preloads())
 		for _, c := range pld.Preloads() {
 			tx = tx.Preload(c)
 		}
-	} else {
-		fmt.Println("preload all")
-		tx = tx.Preload(clause.Associations)
 	}
 
 	err := tx.
@@ -117,17 +114,20 @@ func (w *providerImpl[T]) Find(ctx context.Context, conditions *FindConditions) 
 	var res []*T
 	var m T
 	tx := w.db.WithContext(ctx)
-	tx = conditions.Apply(tx, m)
+	tx, err := conditions.Apply(tx)
+	if err != nil {
+		return nil, err
+	}
 
 	pld, ok := util.As[dbx.Preloader](m)
 	if ok {
-		fmt.Println("preload", pld.Preloads())
+		//fmt.Println("preload", pld.Preloads())
 		for _, c := range pld.Preloads() {
 			tx = tx.Preload(c)
 		}
 	}
 
-	err := tx.Find(&res).Error
+	err = tx.Find(&res).Error
 	if err != nil {
 		return nil, err
 	}
@@ -138,29 +138,35 @@ func (w *providerImpl[T]) FindAssoc(ctx context.Context, parentModel any, assocN
 	var res []*T
 	var m T
 	tx := w.db.WithContext(ctx).Model(parentModel)
-	tx = conditions.Apply(tx, m)
-
+	tx, err := conditions.Apply(tx)
+	if err != nil {
+		return nil, err
+	}
 	pld, ok := util.As[dbx.Preloader](m)
 	if ok {
-		fmt.Println("preload", pld.Preloads())
+		//fmt.Println("preload", pld.Preloads())
 		for _, c := range pld.Preloads() {
 			tx = tx.Preload(c)
 		}
 	}
 
-	err := tx.Association(assocName).Find(&res)
+	err = tx.Association(assocName).Find(&res)
 	if err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-func (w *providerImpl[T]) Count(ctx context.Context, filter FilterSet) (int64, error) {
+func (w *providerImpl[T]) Count(ctx context.Context, filters []FilterFunc) (int64, error) {
 	var m T
 	var cnt int64
 	tx := w.db.WithContext(ctx).Model(&m)
-	tx = filter.Apply(tx, m)
-	err := tx.Count(&cnt).
+	clauses, err := ApplyFilterFunc(filters)
+	if err != nil {
+		return 0, err
+	}
+	tx = tx.Clauses(clauses...)
+	err = tx.Count(&cnt).
 		Error
 	if err != nil {
 		return 0, err
@@ -168,10 +174,13 @@ func (w *providerImpl[T]) Count(ctx context.Context, filter FilterSet) (int64, e
 	return cnt, nil
 }
 
-func (w *providerImpl[T]) CountAssoc(ctx context.Context, parentModel any, assocName string, filter FilterSet) (int64, error) {
-	var m T
+func (w *providerImpl[T]) CountAssoc(ctx context.Context, parentModel any, assocName string, filters []FilterFunc) (int64, error) {
 	tx := w.db.WithContext(ctx).Model(parentModel)
-	tx = filter.Apply(tx, m)
+	clauses, err := ApplyFilterFunc(filters)
+	if err != nil {
+		return 0, err
+	}
+	tx = tx.Clauses(clauses...)
 	assoc := tx.Association(assocName)
 	return assoc.Count(), assoc.Error
 }
@@ -193,13 +202,17 @@ func (w *providerImpl[T]) InsertBatch(ctx context.Context, vs []*T, batchSize in
 }
 
 func (w *providerImpl[T]) Update(ctx context.Context, id int64, v *T) error {
-	return w.db.WithContext(ctx).Model(v).
+	err := w.db.WithContext(ctx).Model(v).
 		Clauses(clause.Returning{}).
 		Where("id = ?", id).
 		Omit("id").
 		Updates(v).
 		Limit(1).
 		Error
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (w *providerImpl[T]) UpdateFields(ctx context.Context, id int64, fields map[string]any) (*T, error) {
@@ -217,9 +230,23 @@ func (w *providerImpl[T]) UpdateFields(ctx context.Context, id int64, fields map
 	return &m, nil
 }
 
+type WithDeletableCheck interface {
+	Deletable(ctx context.Context) bool
+}
+
 // Delete if it's soft delete how to locate and restore it on insert conflict?
 func (w *providerImpl[T]) Delete(ctx context.Context, id int64) error {
 	var m T
+	res, err := w.FindOne(ctx, id)
+	if err != nil {
+		return err
+	}
+	var deleter any = res
+	if d, ok := deleter.(WithDeletableCheck); ok {
+		if !d.Deletable(ctx) {
+			return ErrNotDeletable
+		}
+	}
 	return w.db.WithContext(ctx).
 		Delete(&m, id).
 		Limit(1).
