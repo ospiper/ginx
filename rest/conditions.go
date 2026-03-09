@@ -27,8 +27,10 @@ func (c *FindConditions) Apply(tx *gorm.DB) (*gorm.DB, error) {
 	for _, order := range c.Orders {
 		tx = order.Apply(tx)
 	}
-	fmt.Println(c.Pagination)
-	tx = c.Pagination.Apply(tx)
+	if c.Pagination != nil {
+		fmt.Println(c.Pagination)
+		tx = c.Pagination.Apply(tx)
+	}
 	for _, p := range c.Preloads {
 		tx = tx.Preload(p)
 	}

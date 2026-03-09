@@ -22,6 +22,7 @@ type Provider[T dbx.ModelStruct[T]] interface {
 
 	FindOne(ctx context.Context, id int64) (*T, error)
 	Find(ctx context.Context, conditions *FindConditions) ([]*T, error)
+	FindFirst(ctx context.Context, conditions *FindConditions) (*T, error)
 	FindAssoc(ctx context.Context, parentModel any, assocName string, conditions *FindConditions) ([]*T, error)
 	Count(ctx context.Context, filter []FilterFunc) (int64, error)
 	CountAssoc(ctx context.Context, parentModel any, assocName string, filter []FilterFunc) (int64, error)
@@ -132,6 +133,33 @@ func (w *providerImpl[T]) Find(ctx context.Context, conditions *FindConditions) 
 		return nil, err
 	}
 	return res, nil
+}
+
+func (w *providerImpl[T]) FindFirst(ctx context.Context, conditions *FindConditions) (*T, error) {
+	var res []*T
+	var m T
+	tx := w.db.WithContext(ctx)
+	tx, err := conditions.Apply(tx)
+	if err != nil {
+		return nil, err
+	}
+
+	pld, ok := util.As[dbx.Preloader](m)
+	if ok {
+		//fmt.Println("preload", pld.Preloads())
+		for _, c := range pld.Preloads() {
+			tx = tx.Preload(c)
+		}
+	}
+
+	err = tx.Limit(1).Find(&res).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(res) == 0 {
+		return nil, ErrNotFound
+	}
+	return res[0], nil
 }
 
 func (w *providerImpl[T]) FindAssoc(ctx context.Context, parentModel any, assocName string, conditions *FindConditions) ([]*T, error) {

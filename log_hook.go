@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/gin-contrib/requestid"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 )
@@ -65,12 +66,13 @@ func LogHook(logger *logrus.Logger, notLogged ...string) gin.HandlerFunc {
 			"referer":     referer,
 			"data_length": dataLength, // bytes
 			"user_agent":  clientUserAgent,
+			"request_id":  requestid.Get(c),
 		})
 
 		if len(c.Errors) > 0 {
 			entry.Error(c.Errors.ByType(gin.ErrorTypePrivate).String())
 		} else {
-			msg := fmt.Sprintf("%s - %s [%s] \"%s %s\" %d %d \"%s\" \"%s\" (%dms)", clientIP, hostname, time.Now().Format(timeFormat), c.Request.Method, path, statusCode, dataLength, referer, clientUserAgent, latency)
+			msg := fmt.Sprintf("%s - %s [%s] \"%s %s\" %d %d \"%s\" \"%s\" (%.3fms)", clientIP, hostname, time.Now().Format(timeFormat), c.Request.Method, path, statusCode, dataLength, referer, clientUserAgent, latency)
 			if statusCode >= http.StatusInternalServerError {
 				entry.Error(msg)
 			} else if statusCode >= http.StatusBadRequest {

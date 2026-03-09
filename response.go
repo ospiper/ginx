@@ -60,10 +60,15 @@ func RESTHandlerWithUriParams[TReq, TResp, TUri any](handler func(context.Contex
 	}
 }
 
+type Normalizer interface {
+	Normalize() bool
+}
+
 type APIResponse struct {
-	Success bool   `json:"success"`
-	Data    any    `json:"data"`
-	Error   string `json:"error,omitempty"`
+	Success   bool   `json:"success"`
+	Data      any    `json:"data"`
+	Error     string `json:"error,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
 }
 
 func APIHandler[TReq, TResp any](handler func(context.Context, *TReq) (TResp, error)) func(*gin.Context) {
@@ -75,12 +80,14 @@ func APIHandler[TReq, TResp any](handler func(context.Context, *TReq) (TResp, er
 func APIHandlerWithUriParams[TReq, TResp, TUri any](handler func(context.Context, *TReq, *TUri) (TResp, error)) func(*gin.Context) {
 	return func(c *gin.Context) {
 		log := logrus.WithContext(c)
+		requestID := requestid.Get(c)
 		uriReq := new(TUri)
 		err := c.ShouldBindUri(uriReq)
 		if err != nil {
 			log.WithError(err).Error()
 			c.JSON(http.StatusBadRequest, APIResponse{
-				Error: err.Error(),
+				Error:     err.Error(),
+				RequestID: requestID,
 			})
 			return
 		}
@@ -89,21 +96,31 @@ func APIHandlerWithUriParams[TReq, TResp, TUri any](handler func(context.Context
 		if err != nil {
 			log.WithError(err).Error()
 			c.JSON(http.StatusBadRequest, APIResponse{
-				Error: err.Error(),
+				Error:     err.Error(),
+				RequestID: requestID,
 			})
 			return
+		}
+		if normalizer, ok := any(req).(Normalizer); ok {
+			if normalizer.Normalize() {
+				log.WithFields(logrus.Fields{
+					"req": req,
+				}).Info("normalized req")
+			}
 		}
 		resp, err := handler(c, req, uriReq)
 		if err != nil {
 			log.WithError(err).Error()
 			c.JSON(http.StatusOK, &APIResponse{
-				Error: err.Error(),
+				Error:     err.Error(),
+				RequestID: requestID,
 			})
 			return
 		}
 		c.JSON(http.StatusOK, &APIResponse{
-			Success: true,
-			Data:    resp,
+			Success:   true,
+			Data:      resp,
+			RequestID: requestID,
 		})
 	}
 }
