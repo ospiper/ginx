@@ -19,7 +19,7 @@ var filterVerbs = map[string]func(k string, v any) FilterFunc{
 	"_is_null": IsNull,
 	"_regex":   Regex,
 	"_between": Between,
-	"_like":    IncAny,
+	"_like":    Like,
 	"_ilike":   ILike,
 	"_q":       Q,
 }
@@ -49,6 +49,19 @@ func IncAny(k string, v any) FilterFunc {
 	}
 }
 
+func Like(k string, v any) FilterFunc {
+	return func() (clause.Expression, error) {
+		exp := make([]clause.Expression, 0)
+		for _, s := range explode(v) {
+			exp = append(exp, clause.Like{
+				Column: k,
+				Value:  fmt.Sprintf("%%%s%%", s),
+			})
+		}
+		return clause.And(exp...), nil
+	}
+}
+
 func ILike(k string, v any) FilterFunc {
 	return func() (clause.Expression, error) {
 		exp := make([]clause.Expression, 0)
@@ -61,7 +74,7 @@ func ILike(k string, v any) FilterFunc {
 				},
 			})
 		}
-		return clause.Or(exp...), nil
+		return clause.And(exp...), nil
 	}
 }
 
