@@ -20,6 +20,7 @@ var filterVerbs = map[string]func(k string, v any) FilterFunc{
 	"_regex":   Regex,
 	"_between": Between,
 	"_like":    IncAny,
+	"_ilike":   ILike,
 	"_q":       Q,
 }
 
@@ -42,6 +43,22 @@ func IncAny(k string, v any) FilterFunc {
 			exp = append(exp, clause.Like{
 				Column: k,
 				Value:  fmt.Sprintf("%%%s%%", s),
+			})
+		}
+		return clause.Or(exp...), nil
+	}
+}
+
+func ILike(k string, v any) FilterFunc {
+	return func() (clause.Expression, error) {
+		exp := make([]clause.Expression, 0)
+		for _, s := range asSlice(v) {
+			exp = append(exp, clause.Expr{
+				SQL: "? ILIKE ?",
+				Vars: []any{
+					clause.Column{Name: k},
+					fmt.Sprintf("%%%s%%", s),
+				},
 			})
 		}
 		return clause.Or(exp...), nil
