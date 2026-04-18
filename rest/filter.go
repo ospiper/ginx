@@ -39,7 +39,7 @@ func Neq(k string, v any) FilterFunc {
 func IncAny(k string, v any) FilterFunc {
 	return func() (clause.Expression, error) {
 		exp := make([]clause.Expression, 0)
-		for _, s := range asSlice(v) {
+		for _, s := range explode(v) {
 			exp = append(exp, clause.Like{
 				Column: k,
 				Value:  fmt.Sprintf("%%%s%%", s),
@@ -52,7 +52,7 @@ func IncAny(k string, v any) FilterFunc {
 func ILike(k string, v any) FilterFunc {
 	return func() (clause.Expression, error) {
 		exp := make([]clause.Expression, 0)
-		for _, s := range asSlice(v) {
+		for _, s := range explode(v) {
 			exp = append(exp, clause.Expr{
 				SQL: "? ILIKE ?",
 				Vars: []any{
@@ -147,6 +147,20 @@ func asSlice(v any) []any {
 	ret := make([]any, rv.Len())
 	for i := 0; i < rv.Len(); i++ {
 		ret[i] = rv.Index(i).Interface()
+	}
+	return ret
+}
+
+func explode(v any) []string {
+	var ret []string
+	for _, t := range asSlice(v) {
+		for _, i := range strings.Split(fmt.Sprint(t), " ") {
+			r := strings.TrimSpace(i)
+			if r == "" {
+				continue
+			}
+			ret = append(ret, r)
+		}
 	}
 	return ret
 }
