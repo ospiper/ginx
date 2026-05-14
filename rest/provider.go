@@ -38,6 +38,10 @@ type Provider[T dbx.ModelStruct[T]] interface {
 	DeleteMany(ctx context.Context, ids []int64) error
 }
 
+type DeleteByIDHandler interface {
+	DeleteByID(ctx context.Context, id int64) error
+}
+
 type providerImpl[T dbx.ModelStruct[T]] struct {
 	db *gorm.DB
 }

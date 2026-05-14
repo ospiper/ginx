@@ -232,7 +232,11 @@ func RegisterResourceController[T dbx.ModelStruct[T]](base *gin.RouterGroup, pro
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		err = provider.Delete(c, params.ID)
+		if deleter, ok := any(provider).(DeleteByIDHandler); ok {
+			err = deleter.DeleteByID(c, params.ID)
+		} else {
+			err = provider.Delete(c, params.ID)
+		}
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
