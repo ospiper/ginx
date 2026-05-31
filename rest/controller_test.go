@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -154,7 +155,7 @@ func TestRegisterResourceControllerDeleteFallsBackToProviderDelete(t *testing.T)
 	group := r.Group("/items")
 
 	provider := &providerWithoutCustomDelete{}
-	RegisterResourceController(group, provider)
+	RegisterResourceController[controllerTestModel](group, provider)
 
 	req := httptest.NewRequest(http.MethodDelete, "/items/42", nil)
 	rec := httptest.NewRecorder()
@@ -174,7 +175,7 @@ func TestRegisterResourceControllerDeleteUsesCustomDeleterWhenAvailable(t *testi
 	group := r.Group("/items")
 
 	provider := &controllerTestProvider{}
-	RegisterResourceController(group, provider)
+	RegisterResourceController[controllerTestModel](group, provider)
 
 	req := httptest.NewRequest(http.MethodDelete, "/items/7", nil)
 	rec := httptest.NewRecorder()
@@ -188,5 +189,50 @@ func TestRegisterResourceControllerDeleteUsesCustomDeleterWhenAvailable(t *testi
 	}
 	if len(provider.deleteCalls) != 0 {
 		t.Fatalf("default delete calls = %v, want none", provider.deleteCalls)
+	}
+}
+
+func TestRegisterResourceControllerRegistersFullCRUDRoutesByDefault(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	group := r.Group("/items")
+
+	provider := &controllerTestProvider{}
+	RegisterResourceController[controllerTestModel](group, provider)
+
+	assertRouteMethods(t, r.Routes(), "/items", []string{http.MethodGet, http.MethodPost})
+	assertRouteMethods(t, r.Routes(), "/items/:id", []string{http.MethodDelete, http.MethodGet, http.MethodPut})
+}
+
+func TestRegisterResourceControllerReadOnlyOnlyRegistersGetRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	group := r.Group("/items")
+
+	provider := &controllerTestProvider{}
+	RegisterResourceController[controllerTestModel](group, provider, ReadOnly())
+
+	assertRouteMethods(t, r.Routes(), "/items", []string{http.MethodGet})
+	assertRouteMethods(t, r.Routes(), "/items/:id", []string{http.MethodGet})
+}
+
+func assertRouteMethods(t *testing.T, routes gin.RoutesInfo, path string, want []string) {
+	t.Helper()
+
+	got := make([]string, 0, len(want))
+	for _, route := range routes {
+		if route.Path == path {
+			got = append(got, route.Method)
+		}
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if len(got) != len(want) {
+		t.Fatalf("%s methods = %v, want %v", path, got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("%s methods = %v, want %v", path, got, want)
+		}
 	}
 }

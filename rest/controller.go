@@ -106,8 +106,22 @@ type ResourceController[T dbx.ModelStruct[T]] struct {
 	Group    *gin.RouterGroup
 }
 
+// ResourceControllerOption configures routes registered by RegisterResourceController.
+type ResourceControllerOption func(*resourceControllerConfig)
+
+type resourceControllerConfig struct {
+	readOnly bool
+}
+
+// ReadOnly configures RegisterResourceController to register only GET routes.
+func ReadOnly() ResourceControllerOption {
+	return func(c *resourceControllerConfig) {
+		c.readOnly = true
+	}
+}
+
 func (c *ResourceController[T]) Register() {
-	RegisterResourceController(c.Group, c.Provider)
+	RegisterResourceController[T](c.Group, c.Provider)
 }
 
 func NestedController[TBase dbx.ModelStruct[TBase], TNest dbx.ModelStruct[TNest]](baseController *ResourceController[TBase], nestController *ResourceController[TNest], name string) {
@@ -149,7 +163,12 @@ func NestedController[TBase dbx.ModelStruct[TBase], TNest dbx.ModelStruct[TNest]
 	})
 }
 
-func RegisterResourceController[T dbx.ModelStruct[T]](base *gin.RouterGroup, provider Provider[T]) *ResourceController[T] {
+func RegisterResourceController[T dbx.ModelStruct[T]](base *gin.RouterGroup, provider Provider[T], options ...ResourceControllerOption) *ResourceController[T] {
+	config := &resourceControllerConfig{}
+	for _, option := range options {
+		option(config)
+	}
+
 	base.GET("", func(c *gin.Context) { // /drives
 		cond, err := BuildSimpleRestConditions(c)
 		if err != nil {
@@ -172,20 +191,22 @@ func RegisterResourceController[T dbx.ModelStruct[T]](base *gin.RouterGroup, pro
 		}
 		c.JSON(code, records)
 	})
-	base.POST("", func(c *gin.Context) { // /drives
-		var data T
-		err := c.ShouldBind(&data)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		err = provider.Insert(c, &data)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusCreated, data)
-	})
+	if !config.readOnly {
+		base.POST("", func(c *gin.Context) { // /drives
+			var data T
+			err := c.ShouldBind(&data)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			err = provider.Insert(c, &data)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusCreated, data)
+		})
+	}
 	idGroup := base.Group(":id")
 	idGroup.GET("", func(c *gin.Context) { // /drives/:id
 		params := &IDQueryInPath{}
@@ -205,44 +226,46 @@ func RegisterResourceController[T dbx.ModelStruct[T]](base *gin.RouterGroup, pro
 		}
 		c.JSON(http.StatusOK, ret)
 	})
-	idGroup.PUT("", func(c *gin.Context) { // /drives/:id
-		params := &IDQueryInPath{}
-		err := c.ShouldBindUri(params)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		var data T
-		err = c.ShouldBind(&data)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		err = provider.Update(c, params.ID, &data)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusCreated, data)
-	})
-	idGroup.DELETE("", func(c *gin.Context) { // /drives/:id
-		params := &IDQueryInPath{}
-		err := c.ShouldBindUri(params)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		if deleter, ok := any(provider).(DeleteByIDHandler); ok {
-			err = deleter.DeleteByID(c, params.ID)
-		} else {
-			err = provider.Delete(c, params.ID)
-		}
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusNoContent, nil)
-	})
+	if !config.readOnly {
+		idGroup.PUT("", func(c *gin.Context) { // /drives/:id
+			params := &IDQueryInPath{}
+			err := c.ShouldBindUri(params)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			var data T
+			err = c.ShouldBind(&data)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			err = provider.Update(c, params.ID, &data)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusCreated, data)
+		})
+		idGroup.DELETE("", func(c *gin.Context) { // /drives/:id
+			params := &IDQueryInPath{}
+			err := c.ShouldBindUri(params)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			if deleter, ok := any(provider).(DeleteByIDHandler); ok {
+				err = deleter.DeleteByID(c, params.ID)
+			} else {
+				err = provider.Delete(c, params.ID)
+			}
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusNoContent, nil)
+		})
+	}
 	return &ResourceController[T]{
 		Name:     "resource",
 		Provider: provider,
