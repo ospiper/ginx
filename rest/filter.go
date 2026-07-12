@@ -10,18 +10,24 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-var filterVerbs = map[string]func(k string, v any) FilterFunc{
-	"_eq":      Eq,
-	"_eq_any":  Eq,
-	"_neq":     Neq,
-	"_neq_any": Neq,
-	"_inc_any": IncAny,
-	"_is_null": IsNull,
-	"_regex":   Regex,
-	"_between": Between,
-	"_like":    Like,
-	"_ilike":   ILike,
-	"_q":       Q,
+var filterVerbs = []struct {
+	suffix string
+	build  func(k string, v any) FilterFunc
+}{
+	{"_j_inc_any", JIncAny},
+	{"_j_inc_all", JIncAll},
+	{"_j_eq", JEq},
+	{"_is_null", IsNull},
+	{"_neq_any", Neq},
+	{"_inc_any", IncAny},
+	{"_eq_any", Eq},
+	{"_between", Between},
+	{"_regex", Regex},
+	{"_ilike", ILike},
+	{"_like", Like},
+	{"_neq", Neq},
+	{"_eq", Eq},
+	{"_q", Q},
 }
 
 func Eq(k string, v any) FilterFunc {
@@ -46,6 +52,35 @@ func IncAny(k string, v any) FilterFunc {
 			})
 		}
 		return clause.Or(exp...), nil
+	}
+}
+
+func JIncAny(k string, v any) FilterFunc {
+	d := dialect
+	return func() (clause.Expression, error) {
+		keys, err := jsonKeys(v)
+		if err != nil {
+			return nil, err
+		}
+		return d.JSONIncludesAny(k, keys), nil
+	}
+}
+
+func JIncAll(k string, v any) FilterFunc {
+	d := dialect
+	return func() (clause.Expression, error) {
+		keys, err := jsonKeys(v)
+		if err != nil {
+			return nil, err
+		}
+		return d.JSONIncludesAll(k, keys), nil
+	}
+}
+
+func JEq(k string, v any) FilterFunc {
+	d := dialect
+	return func() (clause.Expression, error) {
+		return d.JSONContains(k, v)
 	}
 }
 
@@ -138,10 +173,10 @@ func parseFilter(k string, v any) (string, FilterFunc) {
 	// could be field or field_verb
 	var field string
 	var expr FilterFunc
-	for verbSuffix, fn := range filterVerbs {
-		if strings.HasSuffix(k, verbSuffix) {
-			field = k[:len(k)-len(verbSuffix)]
-			expr = fn(field, v)
+	for _, verb := range filterVerbs {
+		if strings.HasSuffix(k, verb.suffix) {
+			field = k[:len(k)-len(verb.suffix)]
+			expr = verb.build(field, v)
 			break
 		}
 	}
@@ -150,6 +185,28 @@ func parseFilter(k string, v any) (string, FilterFunc) {
 		expr = Eq(k, v)
 	}
 	return field, expr
+}
+
+func jsonKeys(v any) ([]string, error) {
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() || (rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array) {
+		return nil, errors.New("json key predicate: expect an array of strings")
+	}
+	keys := make([]string, 0, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		key, ok := rv.Index(i).Interface().(string)
+		if !ok {
+			return nil, errors.New("json key predicate: expect an array of strings")
+		}
+		key = strings.TrimSpace(key)
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return nil, errors.New("json key predicate: expect at least one key")
+	}
+	return keys, nil
 }
 
 func asSlice(v any) []any {
