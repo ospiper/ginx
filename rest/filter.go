@@ -171,20 +171,18 @@ func buildFilters(fs string) ([]FilterFunc, error) {
 func parseFilter(k string, v any) (string, FilterFunc) {
 	// parse k
 	// could be field or field_verb
-	var field string
-	var expr FilterFunc
-	for _, verb := range filterVerbs {
-		if strings.HasSuffix(k, verb.suffix) {
-			field = k[:len(k)-len(verb.suffix)]
-			expr = verb.build(field, v)
-			break
+	matched := -1
+	for i, verb := range filterVerbs {
+		if strings.HasSuffix(k, verb.suffix) && (matched < 0 || len(verb.suffix) > len(filterVerbs[matched].suffix)) {
+			matched = i
 		}
 	}
-	if expr == nil {
-		field = k
-		expr = Eq(k, v)
+	if matched < 0 {
+		return k, Eq(k, v)
 	}
-	return field, expr
+	verb := filterVerbs[matched]
+	field := k[:len(k)-len(verb.suffix)]
+	return field, verb.build(field, v)
 }
 
 func jsonKeys(v any) ([]string, error) {

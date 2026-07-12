@@ -2,6 +2,7 @@ package rest
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 
 	"gorm.io/gorm/clause"
@@ -19,10 +20,20 @@ var dialect Dialect = PostgresDialect{}
 // SetDialect configures the process-wide filter dialect. It must be called
 // before the application starts serving requests.
 func SetDialect(d Dialect) {
-	if d == nil {
+	if d == nil || isNilDialect(d) {
 		panic("rest: nil dialect")
 	}
 	dialect = d
+}
+
+func isNilDialect(d Dialect) bool {
+	v := reflect.ValueOf(d)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 // PostgresDialect builds PostgreSQL-specific filter expressions.

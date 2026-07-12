@@ -7,6 +7,12 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+type nilDialect struct{}
+
+func (*nilDialect) JSONIncludesAny(string, []string) clause.Expression  { return nil }
+func (*nilDialect) JSONIncludesAll(string, []string) clause.Expression  { return nil }
+func (*nilDialect) JSONContains(string, any) (clause.Expression, error) { return nil, nil }
+
 func TestPostgresDialectJSONIncludesAny(t *testing.T) {
 	expr := PostgresDialect{}.JSONIncludesAny("meta", []string{"aa", "bb", "cc"})
 
@@ -71,6 +77,17 @@ func TestSetDialectRejectsNil(t *testing.T) {
 	}()
 
 	SetDialect(nil)
+}
+
+func TestSetDialectRejectsTypedNil(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("SetDialect(typed nil) did not panic")
+		}
+	}()
+
+	var d *nilDialect
+	SetDialect(d)
 }
 
 func TestParseFilterJSONIncludesAny(t *testing.T) {
@@ -153,6 +170,34 @@ func TestJSONKeyPredicatesRejectInvalidArrays(t *testing.T) {
 			_, filter := parseFilter("meta_j_inc_any", tt.value)
 			if _, err := filter(); err == nil {
 				t.Fatal("JSON key predicate returned nil error")
+			}
+		})
+	}
+}
+
+func TestParseFilterLegacySuffixes(t *testing.T) {
+	tests := []string{
+		"_eq",
+		"_eq_any",
+		"_neq",
+		"_neq_any",
+		"_inc_any",
+		"_is_null",
+		"_regex",
+		"_between",
+		"_like",
+		"_ilike",
+		"_q",
+	}
+
+	for _, suffix := range tests {
+		t.Run(suffix, func(t *testing.T) {
+			field, filter := parseFilter("name"+suffix, "value")
+			if field != "name" {
+				t.Errorf("parseFilter(%q) field = %q, want %q", suffix, field, "name")
+			}
+			if filter == nil {
+				t.Errorf("parseFilter(%q) returned nil filter", suffix)
 			}
 		})
 	}
