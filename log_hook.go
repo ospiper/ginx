@@ -19,7 +19,20 @@ import (
 
 var timeFormat = "2006-01-02 15:04:05.999999 -0700"
 
+// LogHookConfig configures request logging exclusions.
+type LogHookConfig struct {
+	SkipPaths []string
+	SkipFunc  gin.Skipper
+}
+
+// LogHook creates request logging middleware with exact paths excluded.
 func LogHook(logger *logrus.Logger, notLogged ...string) gin.HandlerFunc {
+	return LogHookWithConfig(logger, LogHookConfig{SkipPaths: notLogged})
+}
+
+// LogHookWithConfig creates request logging middleware with configurable
+// exclusions. SkipFunc runs after the remaining handlers have completed.
+func LogHookWithConfig(logger *logrus.Logger, config LogHookConfig) gin.HandlerFunc {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown"
@@ -27,10 +40,10 @@ func LogHook(logger *logrus.Logger, notLogged ...string) gin.HandlerFunc {
 
 	var skip map[string]struct{}
 
-	if length := len(notLogged); length > 0 {
+	if length := len(config.SkipPaths); length > 0 {
 		skip = make(map[string]struct{}, length)
 
-		for _, p := range notLogged {
+		for _, p := range config.SkipPaths {
 			skip[p] = struct{}{}
 		}
 	}
@@ -40,6 +53,10 @@ func LogHook(logger *logrus.Logger, notLogged ...string) gin.HandlerFunc {
 		path := c.Request.URL.Path
 		start := time.Now()
 		c.Next()
+		if _, ok := skip[path]; ok || (config.SkipFunc != nil && config.SkipFunc(c)) {
+			return
+		}
+
 		stop := time.Since(start)
 		latency := float64(stop.Microseconds()) / 1000
 		statusCode := c.Writer.Status()
@@ -49,10 +66,6 @@ func LogHook(logger *logrus.Logger, notLogged ...string) gin.HandlerFunc {
 		dataLength := c.Writer.Size()
 		if dataLength < 0 {
 			dataLength = 0
-		}
-
-		if _, ok := skip[path]; ok {
-			return
 		}
 
 		entry := log.WithFields(logrus.Fields{
