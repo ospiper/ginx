@@ -22,11 +22,11 @@ func TestLogHookWithConfigSkipsAfterResponse(t *testing.T) {
 	router.Use(LogHookWithConfig(logger, LogHookConfig{
 		SkipPaths: []string{"/polling"},
 		SkipFunc: func(c *gin.Context) bool {
-			return c.Request.URL.Path == "/static" && c.Writer.Status() == http.StatusOK
+			return c.Request.URL.Path == "/static" && c.Writer.Status() == http.StatusNoContent
 		},
 	}))
 	router.GET("/polling", func(c *gin.Context) { c.Status(http.StatusOK) })
-	router.GET("/static", func(c *gin.Context) { c.Status(http.StatusOK) })
+	router.GET("/static", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 	router.GET("/static-error", func(c *gin.Context) { c.Status(http.StatusNotFound) })
 	router.GET("/api", func(c *gin.Context) { c.Status(http.StatusOK) })
 
